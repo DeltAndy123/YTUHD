@@ -11,9 +11,15 @@
 #import <version.h>
 #import "Header.h"
 
+typedef struct {
+    const unsigned int *data;
+    uint64_t length;
+} Span;
+
 extern "C" {
     BOOL UseVP9();
     BOOL AllVP9();
+    BOOL DisableServerABR();
     int DecodeThreads();
     BOOL SkipLoopFilter();
     BOOL LoopFilterOptimization();
@@ -120,9 +126,17 @@ static void hookFormats(MLABRPolicy *self) {
     return YES;
 }
 
+- (BOOL)iosPlayerClientSharedConfigDisableLibvpxDecoder {
+    return NO;
+}
+
 %end
 
 %hook YTHotConfig
+
+- (BOOL)iosPlayerClientSharedConfigDisableServerDrivenAbr {
+    return DisableServerABR() ? YES : %orig;
+}
 
 - (BOOL)iosPlayerClientSharedConfigPostponeCabrPreferredFormatFiltering {
     return YES;
@@ -179,34 +193,40 @@ static void hookFormats(MLABRPolicy *self) {
 
 %end
 
-BOOL override = NO;
+BOOL overrideSupportsCodec = NO;
+BOOL disableHardwareDecode = NO;
 
 %hookf(Boolean, VTIsHardwareDecodeSupported, CMVideoCodecType codecType) {
-    if (codecType == kCMVideoCodecType_VP9 || codecType == kCMVideoCodecType_AV1)
+    if (!disableHardwareDecode && (codecType == kCMVideoCodecType_VP9 || codecType == kCMVideoCodecType_AV1)) {
+        HBLogDebug(@"YTUHD - VTIsHardwareDecodeSupported called for codec: %d", codecType);
         return YES;
+    }
     return %orig;
 }
 
 %hook MLVideoDecoderFactory
 
-- (id)videoDecoderWithDelegate:(id)delegate delegateQueue:(id)delegateQueue formatDescription:(id)formatDescription pixelBufferAttributes:(id)pixelBufferAttributes preferredOutputFormats:(const void *)preferredOutputFormats error:(NSError **)error {
-    override = YES;
+- (id)videoDecoderWithDelegate:(id)delegate delegateQueue:(id)delegateQueue formatDescription:(id)formatDescription pixelBufferAttributes:(id)pixelBufferAttributes preferredOutputFormats:(Span)preferredOutputFormats error:(NSError **)error {
+    HBLogDebug(@"YTUHD - MLVideoDecoderFactory videoDecoderWithDelegate called");
+    overrideSupportsCodec = YES;
     id decoder = %orig;
-    override = NO;
+    overrideSupportsCodec = NO;
     return decoder;
 }
 
 - (id)videoDecoderWithDelegate:(id)delegate delegateQueue:(id)delegateQueue formatDescription:(id)formatDescription pixelBufferAttributes:(id)pixelBufferAttributes setPixelBufferTypeOnlyIfEmpty:(BOOL)setPixelBufferTypeOnlyIfEmpty error:(NSError **)error {
-    override = YES;
+    HBLogDebug(@"YTUHD - MLVideoDecoderFactory videoDecoderWithDelegate called");
+    overrideSupportsCodec = YES;
     id decoder = %orig;
-    override = NO;
+    overrideSupportsCodec = NO;
     return decoder;
 }
 
 - (id)videoDecoderWithDelegate:(id)delegate delegateQueue:(id)delegateQueue formatDescription:(id)formatDescription pixelBufferAttributes:(id)pixelBufferAttributes error:(NSError **)error {
-    override = YES;
+    HBLogDebug(@"YTUHD - MLVideoDecoderFactory videoDecoderWithDelegate called");
+    overrideSupportsCodec = YES;
     id decoder = %orig;
-    override = NO;
+    overrideSupportsCodec = NO;
     return decoder;
 }
 
@@ -214,26 +234,36 @@ BOOL override = NO;
 
 %hook HAMDefaultVideoDecoderFactory
 
-- (id)videoDecoderWithDelegate:(id)delegate delegateQueue:(id)delegateQueue formatDescription:(id)formatDescription pixelBufferAttributes:(id)pixelBufferAttributes preferredOutputFormats:(const void *)preferredOutputFormats error:(NSError **)error {
-    override = YES;
+- (id)videoDecoderWithDelegate:(id)delegate delegateQueue:(id)delegateQueue formatDescription:(id)formatDescription pixelBufferAttributes:(id)pixelBufferAttributes preferredOutputFormats:(Span)preferredOutputFormats error:(NSError **)error {
+    HBLogDebug(@"YTUHD - HAMDefaultVideoDecoderFactory videoDecoderWithDelegate called");
+    overrideSupportsCodec = YES;
     id decoder = %orig;
-    override = NO;
+    overrideSupportsCodec = NO;
     return decoder;
 }
 
 - (id)videoDecoderWithDelegate:(id)delegate delegateQueue:(id)delegateQueue formatDescription:(id)formatDescription pixelBufferAttributes:(id)pixelBufferAttributes setPixelBufferTypeOnlyIfEmpty:(BOOL)setPixelBufferTypeOnlyIfEmpty error:(NSError **)error {
-    override = YES;
+    HBLogDebug(@"YTUHD - HAMDefaultVideoDecoderFactory videoDecoderWithDelegate called");
+    overrideSupportsCodec = YES;
     id decoder = %orig;
-    override = NO;
+    overrideSupportsCodec = NO;
     return decoder;
 }
 
 - (id)videoDecoderWithDelegate:(id)delegate delegateQueue:(id)delegateQueue formatDescription:(id)formatDescription pixelBufferAttributes:(id)pixelBufferAttributes error:(NSError **)error {
-    override = YES;
+    HBLogDebug(@"YTUHD - HAMDefaultVideoDecoderFactory videoDecoderWithDelegate called");
+    overrideSupportsCodec = YES;
     id decoder = %orig;
-    override = NO;
+    overrideSupportsCodec = NO;
     return decoder;
 }
+
+%end
+
+%hook YTIIosOnesieHotConfig
+
+%new(B@:)
+- (BOOL)prepareVideoDecoder { return YES; }
 
 %end
 
@@ -241,10 +271,10 @@ BOOL override = NO;
 
 BOOL (*SupportsCodec)(CMVideoCodecType codec) = NULL;
 %hookf(BOOL, SupportsCodec, CMVideoCodecType codec) {
-    if (override && (codec == kCMVideoCodecType_VP9 || codec == kCMVideoCodecType_AV1)) {
+    if (overrideSupportsCodec && (codec == kCMVideoCodecType_VP9 || codec == kCMVideoCodecType_AV1)) {
+        HBLogDebug(@"YTUHD - SupportsCodec called for codec: %d, returning NO", codec);
         return NO;
     }
-
     return %orig;
 }
 
@@ -255,7 +285,7 @@ BOOL (*SupportsCodec)(CMVideoCodecType codec) = NULL;
 %hook UIDevice
 
 - (NSString *)systemVersion {
-    return @"15.8.4";
+    return @"15.8.5";
 }
 
 %end
@@ -266,7 +296,7 @@ BOOL (*SupportsCodec)(CMVideoCodecType codec) = NULL;
     NSOperatingSystemVersion version;
     version.majorVersion = 15;
     version.minorVersion = 8;
-    version.patchVersion = 4;
+    version.patchVersion = 5;
     return version;
 }
 
@@ -296,9 +326,7 @@ BOOL (*SupportsCodec)(CMVideoCodecType codec) = NULL;
         0x28, 0x66, 0x8c, 0x52,
         0xc8, 0x2e, 0xac, 0x72,
         0x1f, 0x00, 0x08, 0x6b,
-        0x61, 0x00, 0x00, 0x54,
-        0x20, 0x00, 0x80, 0x52,
-        0xc0, 0x03, 0x5f, 0xd6
+        0x61, 0x00, 0x00, 0x54
     };
     uint8_t pattern2[] = {
         0xf4, 0x4f, 0xbe, 0xa9,
