@@ -1,6 +1,5 @@
 #import <CoreMedia/CoreMedia.h>
-#import <Foundation/NSProcessInfo.h>
-#import <Foundation/NSString.h>
+#import <Foundation/Foundation.h>
 #import <HBLog.h>
 #import <substrate.h>
 #ifdef SIDELOAD
